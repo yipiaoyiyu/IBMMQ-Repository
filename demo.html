@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跨境支付MQ高可用应急推演</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#0d1117;color:#e6edf3;font-family:'Microsoft YaHei',sans-serif;display:flex;height:100vh;overflow:hidden}
+  #stage{flex:1;position:relative;min-width:0}
+  #panel{width:360px;background:#161b22;border-left:1px solid #30363d;padding:16px;overflow-y:auto}
+  h2{font-size:15px;color:#58a6ff;margin:0 0 10px}
+  .btn{display:block;width:100%;margin:6px 0;padding:9px;background:#21262d;border:1px solid #30363d;color:#e6edf3;border-radius:6px;cursor:pointer;font-size:13px;text-align:left}
+  .btn:hover{background:#30363d}
+  .btn.active{background:#1f6feb;border-color:#1f6feb}
+  .step{font-size:12.5px;line-height:1.7;padding:6px 8px;margin:4px 0;background:#0d1117;border-left:3px solid #58a6ff;border-radius:4px;opacity:0;transform:translateX(10px);transition:.4s}
+  .step.show{opacity:1;transform:none}
+  .step.warn{border-left-color:#d29922}
+  .step.dep{border-left-color:#8b949e;color:#8b949e}
+  .legend{font-size:11.5px;color:#8b949e;line-height:1.8;margin-top:12px;border-top:1px solid #30363d;padding-top:10px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+  .blind{position:absolute;background:#d29922;color:#000;padding:10px 14px;border-radius:8px;font-size:12.5px;font-weight:bold;max-width:260px;box-shadow:0 4px 20px rgba(210,153,34,.5);opacity:0;transition:.5s;pointer-events:none}
+  .blind.show{opacity:1}
+  svg text{font-family:'Microsoft YaHei',sans-serif}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+  @media (max-width: 768px){
+    body{flex-direction:column;height:auto;overflow:auto}
+    #stage{height:58vh;min-height:320px}
+    #panel{width:100%;border-left:none;border-top:1px solid #30363d;max-height:none}
+    .btn{font-size:14px;padding:12px}
+    .step{font-size:13.5px}
+    h2{font-size:16px}
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+<svg id="svg" width="100%" height="100%" viewBox="0 0 1100 640" preserveAspectRatio="xMidYMid meet" style="max-height:58vh">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#58a6ff"/></marker>
+    <marker id="arrowGray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8b949e"/></marker>
+  </defs>
+
+  <rect x="20" y="60" width="300" height="420" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="170" y="85" fill="#8b949e" font-size="11.5" text-anchor="middle">总行IDC A / IDC B 外联前置区</text>
+  <rect x="360" y="60" width="330" height="420" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="525" y="85" fill="#8b949e" font-size="13" text-anchor="middle">香港 A / B IDC</text>
+  <rect x="730" y="60" width="340" height="420" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="900" y="85" fill="#8b949e" font-size="13" text-anchor="middle">HKICL（对端，部分待确认）</text>
+
+  <g id="outbound">
+    <rect id="gw" x="40" y="130" width="120" height="60" rx="8" fill="#1f6feb" stroke="#58a6ff"/>
+    <text x="100" y="155" fill="#fff" font-size="12" text-anchor="middle">外联网关</text>
+    <text x="100" y="172" fill="#c9d1d9" font-size="10" text-anchor="middle">5s探活·随机分发</text>
+
+    <rect id="mq01" x="200" y="110" width="100" height="50" rx="8" fill="#238636" stroke="#3fb950"/>
+    <text x="250" y="132" fill="#fff" font-size="10.5" text-anchor="middle">总行IDC A 01</text>
+    <text x="250" y="147" fill="#c9d1d9" font-size="10" text-anchor="middle">MQ实例</text>
+
+    <rect id="mq02" x="200" y="210" width="100" height="50" rx="8" fill="#238636" stroke="#3fb950"/>
+    <text x="250" y="232" fill="#fff" font-size="10.5" text-anchor="middle">总行IDC B 02</text>
+    <text x="250" y="247" fill="#c9d1d9" font-size="10" text-anchor="middle">MQ实例</text>
+
+    <rect id="idcA" x="380" y="110" width="110" height="50" rx="8" fill="#238636" stroke="#3fb950"/>
+    <text x="435" y="132" fill="#fff" font-size="12" text-anchor="middle">香港A IDC</text>
+    <text x="435" y="147" fill="#c9d1d9" font-size="10" text-anchor="middle">外联接入区</text>
+
+    <rect id="idcB" x="380" y="210" width="110" height="50" rx="8" fill="#238636" stroke="#3fb950"/>
+    <text x="435" y="232" fill="#fff" font-size="12" text-anchor="middle">香港B IDC</text>
+    <text x="435" y="247" fill="#c9d1d9" font-size="10" text-anchor="middle">外联接入区</text>
+
+    <rect id="hkOut" x="760" y="160" width="140" height="50" rx="8" fill="#238636" stroke="#3fb950"/>
+    <text x="830" y="182" fill="#fff" font-size="12" text-anchor="middle">HKICL MQ</text>
+    <text x="830" y="197" fill="#c9d1d9" font-size="10" text-anchor="middle">出局接收</text>
+
+    <path id="l_gw01" d="M160,150 L200,135" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path id="l_gw02" d="M160,170 L200,235" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path id="l_01A" d="M300,135 L380,135" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path id="l_02B" d="M300,235 L380,235" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path id="l_Ahk" d="M490,135 L760,175" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path id="l_Bhk" d="M490,235 L760,195" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  </g>
+
+  <g id="inbound" opacity="0.55">
+    <rect id="hkIn" x="760" y="330" width="140" height="50" rx="8" fill="#21262d" stroke="#8b949e" stroke-dasharray="4"/>
+    <text x="830" y="352" fill="#8b949e" font-size="12" text-anchor="middle">HKICL 入局</text>
+    <text x="830" y="367" fill="#8b949e" font-size="10" text-anchor="middle">? 待确认</text>
+
+    <rect id="esb" x="40" y="330" width="120" height="60" rx="8" fill="#21262d" stroke="#8b949e" stroke-dasharray="4"/>
+    <text x="100" y="355" fill="#8b949e" font-size="12" text-anchor="middle">核心系统</text>
+    <text x="100" y="372" fill="#8b949e" font-size="10" text-anchor="middle">ESB</text>
+
+    <path id="l_hkA" d="M760,345 L490,250" stroke="#8b949e" stroke-width="2" stroke-dasharray="5" fill="none" marker-end="url(#arrowGray)"/>
+    <path id="l_hkB" d="M760,365 L490,270" stroke="#8b949e" stroke-width="2" stroke-dasharray="5" fill="none" marker-end="url(#arrowGray)"/>
+    <path id="l_Aesb" d="M380,260 L160,340" stroke="#8b949e" stroke-width="2" stroke-dasharray="5" fill="none" marker-end="url(#arrowGray)"/>
+    <path id="l_Besb" d="M380,275 L160,355" stroke="#8b949e" stroke-width="2" stroke-dasharray="5" fill="none" marker-end="url(#arrowGray)"/>
+  </g>
+
+  <circle id="p1" r="5" fill="#58a6ff"><animateMotion dur="2.5s" repeatCount="indefinite"><mpath href="#l_gw01"/></animateMotion></circle>
+  <circle id="p2" r="5" fill="#58a6ff"><animateMotion dur="2.5s" repeatCount="indefinite" begin="1s"><mpath href="#l_gw02"/></animateMotion></circle>
+  <circle id="p3" r="5" fill="#58a6ff"><animateMotion dur="2.5s" repeatCount="indefinite"><mpath href="#l_01A"/></animateMotion></circle>
+  <circle id="p4" r="5" fill="#58a6ff"><animateMotion dur="2.5s" repeatCount="indefinite" begin="1s"><mpath href="#l_02B"/></animateMotion></circle>
+  <circle id="p5" r="5" fill="#58a6ff"><animateMotion dur="3s" repeatCount="indefinite"><mpath href="#l_Ahk"/></animateMotion></circle>
+  <circle id="p6" r="5" fill="#58a6ff"><animateMotion dur="3s" repeatCount="indefinite" begin="1.5s"><mpath href="#l_Bhk"/></animateMotion></circle>
+</svg>
+<div id="blindBox" class="blind">⚠ 盲区：通道探活正常，但下游专线断！消息在01队列堆积，网关不知情，需监控队列深度告警。</div>
+</div>
+
+<div id="panel">
+  <h2>应急场景推演</h2>
+  <button class="btn active" onclick="reset()">0. 正常基线</button>
+  <button class="btn" onclick="scenario1()">1. 总行IDC A 01实例宕机</button>
+  <button class="btn" onclick="scenario2()">2. 总行IDC B 02实例宕机</button>
+  <button class="btn" onclick="scenario3()">3. 单条专线闪断（盲区）</button>
+  <button class="btn" onclick="scenario4()">4. 总行IDC A外联区整体挂掉</button>
+  <button class="btn" onclick="scenario5()">5. 入局方向受影响</button>
+  <div id="steps"></div>
+  <div class="legend">
+    <span class="dot" style="background:#3fb950"></span>正常　
+    <span class="dot" style="background:#f85149"></span>故障　
+    <span class="dot" style="background:#d29922"></span>承接/警告<br>
+    <span style="color:#58a6ff">实线</span>=出局（我方可控）　
+    <span style="color:#8b949e">虚线</span>=入局（依赖对端）
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const stepsBox = $('steps');
+
+function setNode(id, cls){
+  const el = $(id);
+  const colors = {
+    normal:['#238636','#3fb950','#fff'],
+    down:['#da3633','#f85149','#fff'],
+    active:['#9e6a03','#d29922','#fff'],
+    warn:['#9e6a03','#d29922','#fff'],
+    gray:['#21262d','#8b949e','#8b949e']
+  };
+  const c = colors[cls];
+  el.setAttribute('fill', c[0]);
+  el.setAttribute('stroke', c[1]);
+  el.querySelectorAll('text').forEach(t=>t.setAttribute('fill', c[2]));
+  if(cls==='down'){ el.style.animation='blink 0.8s infinite'; }
+  else { el.style.animation=''; }
+}
+function setLine(id, color, dash){
+  const l = $(id);
+  l.setAttribute('stroke', color);
+  l.setAttribute('stroke-dasharray', dash||'0');
+}
+function clearSteps(){ stepsBox.innerHTML=''; }
+function addStep(text, type=''){
+  const d = document.createElement('div');
+  d.className = 'step ' + type;
+  d.textContent = text;
+  stepsBox.appendChild(d);
+  setTimeout(()=>d.classList.add('show'), 50);
+}
+function hideBlind(){ $('blindBox').classList.remove('show'); }
+
+function reset(){
+  hideBlind(); clearSteps();
+  ['mq01','mq02','idcA','idcB','hkOut','gw'].forEach(id=>setNode(id,'normal'));
+  setNode('hkIn','gray'); setNode('esb','gray');
+  ['l_gw01','l_gw02','l_01A','l_02B','l_Ahk','l_Bhk'].forEach(id=>setLine(id,'#58a6ff','0'));
+  ['l_hkA','l_hkB','l_Aesb','l_Besb'].forEach(id=>setLine(id,'#8b949e','5'));
+  ['p1','p2','p3','p4','p5','p6'].forEach(id=>$(id).style.display='');
+  $('inbound').setAttribute('opacity','0.55');
+  addStep('基线：出局流量经5s探活随机分发至01/02，双专线正常。','dep');
+  addStep('入局方向为虚线：HKICL侧探活周期与路由策略待确认。','dep');
+}
+
+function scenario1(){
+  reset(); clearSteps();
+  setNode('mq01','down');
+  setLine('l_gw01','#f85149','6'); setLine('l_01A','#f85149','6');
+  $('p1').style.display='none'; $('p3').style.display='none';
+  setTimeout(()=>{
+    setNode('mq02','active');
+    addStep('① 网关5s探活失败，停止向01发送。');
+    addStep('② 出局流量全部切至总行IDC B 02，02高亮承接。');
+    addStep('③ 验证02到香港B IDC专线通道正常。');
+    addStep('④ 监控02负载与队列深度。','warn');
+    addStep('⑤ 入局受影响：01入局虚线变灰，依赖HKICL侧路由切换（待确认）。','dep');
+    setNode('hkIn','gray');
+  }, 1200);
+}
+
+function scenario2(){
+  reset(); clearSteps();
+  setNode('mq02','down');
+  setLine('l_gw02','#f85149','6'); setLine('l_02B','#f85149','6');
+  $('p2').style.display='none'; $('p4').style.display='none';
+  setTimeout(()=>{
+    setNode('mq01','active');
+    addStep('① 网关5s探活失败，停止向02发送。');
+    addStep('② 出局流量全部切至总行IDC A 01，01高亮承接。');
+    addStep('③ 关注专线A带宽余量，01单点承接全量。','warn');
+    addStep('④ 入局同理，依赖HKICL侧切换。','dep');
+  }, 1200);
+}
+
+function scenario3(){
+  reset(); clearSteps();
+  setLine('l_Ahk','#d29922','8');
+  $('p5').style.display='none';
+  setTimeout(()=>{
+    addStep('① 总行IDC A 01→HKICL专线闪断。');
+    addStep('② 网关5s探活针对MQ发送通道，通道正常，探活通过。');
+    addStep('③ 光点继续发往01，01 MQ收下消息但发不出去。');
+    setNode('mq01','warn');
+    addStep('④ 消息在01队列堆积，队列深度告警触发。','warn');
+    $('blindBox').style.left = '20%';
+    $('blindBox').style.top = '55%';
+    $('blindBox').classList.add('show');
+    addStep('⑤ 人工判断：检查队列深度，决定是否手动切02。','warn');
+    addStep('⑥ 联系网络组确认专线，依赖HKICL侧配合恢复。','dep');
+  }, 1000);
+}
+
+function scenario4(){
+  reset(); clearSteps();
+  ['gw','mq01','idcA'].forEach(id=>setNode(id,'down'));
+  ['l_gw01','l_01A','l_Ahk','l_gw02'].forEach(id=>setLine(id,'#f85149','6'));
+  ['p1','p3','p5'].forEach(id=>$(id).style.display='none');
+  setTimeout(()=>{
+    setNode('mq02','active'); setNode('idcB','active');
+    addStep('① 总行IDC A外联前置区整体故障（路由/交换/防火墙/MQ）。');
+    addStep('② 总行IDC B 02全量接管出局+入局。');
+    addStep('③ 02负载从30%升至90%，黄色警告。','warn');
+    addStep('④ 通知HKICL侧确认入局切换。','dep');
+    addStep('⑤ 评估02容量，必要时启动限流或灾备预案。','warn');
+  }, 1200);
+}
+
+function scenario5(){
+  scenario1();
+  setTimeout(()=>{
+    $('inbound').setAttribute('opacity','1');
+    addStep('【入局专场景】01宕机后：');
+    addStep('✓ 我方可控：02 MQ实例持久化接收，队列开始堆积入局消息。');
+    addStep('✓ 我方可控：重连等待动画，消息不丢。');
+    addStep('? 依赖对端：HKICL侧探活周期未知，入局切换时间不可控。','dep');
+    addStep('? 依赖对端：HKICL是否有多个IDC、如何路由，待确认。','dep');
+  }, 2500);
+}
+
+reset();
+</script>
+</body>
+</html>
